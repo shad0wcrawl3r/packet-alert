@@ -1,6 +1,8 @@
 #![allow(non_upper_case_globals)]
 // extern crate pnet;
 use chrono::{self, Local};
+use core::fmt;
+use std::hash::Hash;
 use pnet::packet::ethernet::{EtherTypes, EthernetPacket};
 use pnet::packet::ip::IpNextHeaderProtocol;
 use pnet::packet::ip::IpNextHeaderProtocols::{Tcp, Udp};
@@ -10,27 +12,46 @@ use pnet::packet::{tcp::TcpPacket, udp::UdpPacket};
 use pnet_datalink::Channel::Ethernet;
 use pnet_datalink::{self as datalink};
 use std::collections::HashMap;
-use std::fs::read;
+// use std::fs::read;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::{Arc, Mutex, RwLock,mpsc};
-use std::thread::{self, sleep, Builder as threadBuilder};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
+// use std::time::Duration;
 
-fn pretty_print<T: Into<IpAddr>>(
-    src_ip: T,
-    dst_ip: T,
+struct NetFlow {
+    src_ip: IpAddr,
+    dst_ip: IpAddr,
     src_port: u16,
     dst_port: u16,
     protocol: IpNextHeaderProtocol,
-) {
-    println!(
-        "{:?}:{} =={}==> {:?}:{}",
-        src_ip.into(),
-        src_port,
-        protocol,
-        dst_ip.into(),
-        dst_port
-    );
+}
+
+impl NetFlow {
+    fn new(
+        src_ip: IpAddr,
+        dst_ip: IpAddr,
+        src_port: u16,
+        dst_port: u16,
+        protocol: IpNextHeaderProtocol,
+    ) -> NetFlow {
+        NetFlow {
+            src_ip: src_ip,
+            dst_ip: dst_ip,
+            src_port: src_port,
+            dst_port: dst_port,
+            protocol: protocol,
+        }
+    }
+}
+impl fmt::Display for NetFlow {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // code to specify how the struct should be displayed goes here
+        write!(
+            f,
+            "{:?}:{} =={}==> {:?}:{}",
+            self.src_ip, self.src_port, self.protocol, self.dst_ip, self.dst_port
+        )
+    }
 }
 
 fn resolve_targets(packet: &[u8], protocol: IpNextHeaderProtocol) -> (u16, u16) {
@@ -47,29 +68,23 @@ fn resolve_targets(packet: &[u8], protocol: IpNextHeaderProtocol) -> (u16, u16) 
     }
 }
 
-fn handle_v4_packet(
-    ethernet_packet: EthernetPacket,
-    packet: &[u8],
-) -> (Ipv4Addr, Ipv4Addr, u16, u16, IpNextHeaderProtocol) {
+fn handle_v4_packet(ethernet_packet: EthernetPacket, packet: &[u8]) -> NetFlow {
     let ipv4_packet = Ipv4Packet::new(ethernet_packet.payload()).unwrap();
     let src_ip: Ipv4Addr = ipv4_packet.get_source();
     let dst_ip: Ipv4Addr = ipv4_packet.get_destination();
     let protocol = ipv4_packet.get_next_level_protocol();
     let (src_port, dst_port) = resolve_targets(packet, protocol);
     // pretty_print(src_ip, dst_ip, src_port, dst_port, protocol);
-    (src_ip, dst_ip, src_port, dst_port, protocol)
+    NetFlow::new(src_ip.into(), dst_ip.into(), src_port, dst_port, protocol)
 }
 
-fn handle_v6_packet(
-    ethernet_packet: EthernetPacket,
-    packet: &[u8],
-) -> (Ipv6Addr, Ipv6Addr, u16, u16, IpNextHeaderProtocol) {
+fn handle_v6_packet(ethernet_packet: EthernetPacket, packet: &[u8]) -> NetFlow {
     let ipv6_packet = Ipv6Packet::new(ethernet_packet.payload()).unwrap();
     let src_ip: Ipv6Addr = ipv6_packet.get_source();
     let dst_ip: Ipv6Addr = ipv6_packet.get_destination();
     let protocol = ipv6_packet.get_next_header();
     let (src_port, dst_port) = resolve_targets(packet, protocol);
-    (src_ip, dst_ip, src_port, dst_port, protocol)
+    NetFlow::new(src_ip.into(), dst_ip.into(), src_port, dst_port, protocol)
 }
 
 fn process_packet(packet: &[u8], reflections: &mut HashMap<IpAddr, i64>) {
@@ -78,9 +93,9 @@ fn process_packet(packet: &[u8], reflections: &mut HashMap<IpAddr, i64>) {
     match ethernet_packet.get_ethertype() {
         // Check the ethertype and handle the packet accordingly
         EtherTypes::Ipv4 => {
-            let (src_ip, dst_ip, src_port, dst_port, protocol) =
-                handle_v4_packet(ethernet_packet, packet);
-            reflections.insert(src_ip.try_into().unwrap(), Local::now().timestamp());
+            let flow = handle_v4_packet(ethernet_packet, packet);
+            println!("{}", flow);
+            reflections.insert(flow.src_ip.try_into().unwrap(), Local::now().timestamp());
         }
         EtherTypes::Ipv6 => {
             // // This is me basically ignoring Ipv6 Packets
@@ -94,13 +109,12 @@ fn process_packet(packet: &[u8], reflections: &mut HashMap<IpAddr, i64>) {
     }
 }
 fn alert(ip: &IpAddr) {
-    println!("{}", ip)
+    println!("{}", ip);
 }
 fn check_timeouts(reflections: &mut HashMap<IpAddr, i64>) {}
 
-
-fn main() { 
-    let reflections: Arc<Mutex<HashMap<IpAddr, i64>>> = Arc::new(Mutex::new(HashMap::new()));
+fn main() {
+    let reflections: Arc<RwLock<HashMap<IpAddr, i64>>> = Arc::new(RwLock::new(HashMap::new()));
     // let (mptx,mprx) = mpsc::channel();
     // let mut reflections: HashMap<IpAddr, i64> = HashMap::new();
     let interface_name = "enp3s0";
@@ -123,25 +137,31 @@ fn main() {
     let writer = thread::spawn({
         let reflections = Arc::clone(&reflections);
         move || loop {
-            let mut write_reflections = reflections.lock().unwrap();
+            let mut write_reflections = reflections.write().unwrap();
             match rx.next() {
-                            Ok(x) => process_packet(x, &mut write_reflections),
-                            Err(err) => println!("{:?}", err),
-                        }
-        }
-    });
-
-    let reader = thread::spawn(move || {
-        loop {
-            let read_reflections = reflections.lock().unwrap();
-            for (ip, last_time) in read_reflections.iter() {
-                let time_diff = Local::now().timestamp() - last_time;
-                if time_diff > 30 {
-                    alert(ip);
-                }
+                Ok(x) => process_packet(x, &mut write_reflections),
+                Err(err) => println!("{:?}", err),
             }
         }
     });
+
+    let reader = thread::spawn({
+        let mut alerted: HashMap<IpAddr,i64> = HashMap::new();
+        let mut last_clean = Local::now().timestamp();
+        move || loop {
+        let read_reflections = reflections.read().unwrap();
+        let now = Local::now().timestamp();
+        for (ip, last_time) in read_reflections.iter() {
+            if alerted.contains_key(ip) {
+                continue;
+            }
+            let time_diff = now - last_time;
+            if time_diff > 30 {
+                alert(ip);
+                alerted.insert(*ip,now);
+            }
+        }
+    }});
 
     reader.join().unwrap();
     writer.join().unwrap();
