@@ -1,5 +1,8 @@
 [package]
 name = "packet-alert"
+description = "A simple project that pings the user each time a new connection stream is detected or a stream gets silent."
+authors = ["Ashwin Belbase <ashwinbelbase@gmail.com>"]
+repository = "https://github.com/shad0wcrawl3r/packet-alert.git"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,3 +12,4 @@ edition = "2021"
 chrono = "0.4.23"
 pnet = { version = "0.31.0", features = ["pnet_datalink"] }
 pnet_datalink = "0.31.0"
+reqwest = "0.11.13"

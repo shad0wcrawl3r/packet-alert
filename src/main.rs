@@ -56,7 +56,7 @@ fn handle_v4_packet(
     let dst_ip: Ipv4Addr = ipv4_packet.get_destination();
     let protocol = ipv4_packet.get_next_level_protocol();
     let (src_port, dst_port) = resolve_targets(packet, protocol);
-    pretty_print(src_ip, dst_ip, src_port, dst_port, protocol);
+    // pretty_print(src_ip, dst_ip, src_port, dst_port, protocol);
     (src_ip, dst_ip, src_port, dst_port, protocol)
 }
 
@@ -99,7 +99,7 @@ fn alert(ip: &IpAddr) {
 fn check_timeouts(reflections: &mut HashMap<IpAddr, i64>) {}
 
 
-fn main() {
+fn main() { 
     let reflections: Arc<Mutex<HashMap<IpAddr, i64>>> = Arc::new(Mutex::new(HashMap::new()));
     // let (mptx,mprx) = mpsc::channel();
     // let mut reflections: HashMap<IpAddr, i64> = HashMap::new();
@@ -120,72 +120,29 @@ fn main() {
             e
         ),
     };
-    
-    let writer = thread::spawn(|| {
-        loop {
-            let mut write_reflections = reflections.lock().unwrap().clone();
+    let writer = thread::spawn({
+        let reflections = Arc::clone(&reflections);
+        move || loop {
+            let mut write_reflections = reflections.lock().unwrap();
             match rx.next() {
-                Ok(x) => process_packet(x, &mut write_reflections),
-                Err(err) => println!("{:?}", err),
-            }
+                            Ok(x) => process_packet(x, &mut write_reflections),
+                            Err(err) => println!("{:?}", err),
+                        }
         }
     });
 
-    let reader = thread::spawn(|| {
+    let reader = thread::spawn(move || {
         loop {
-            let read_reflections = reflections.lock().unwrap().clone();
+            let read_reflections = reflections.lock().unwrap();
             for (ip, last_time) in read_reflections.iter() {
                 let time_diff = Local::now().timestamp() - last_time;
                 if time_diff > 30 {
                     alert(ip);
                 }
             }
-            sleep(Duration::from_secs(30))
         }
     });
 
-    reader.join();
-    writer.join();
-    // let reader = threadBuilder::new()
-    //     .name("Reader".into())
-    //     .spawn(|| loop {
-    //         let read_reflections = reflections.lock().unwrap().clone();
-    //         for (ip, last_time) in read_reflections.into_iter() {
-    //             let time_diff = Local::now().timestamp() - last_time;
-    //             if time_diff > 30 {
-    //                 alert(ip);
-    //             }
-    //         }
-    //         sleep(Duration::from_secs(30))
-    //     })
-    //     .unwrap();
-    // let writer = threadBuilder::new()
-    //     .name("Writer".into())
-    //     .spawn(move || loop {
-    //         let mut write_reflection = reflections.lock().unwrap();
-    //         match rx.next() {
-    //             Ok(x) => process_packet(x, &mut write_reflection),
-    //             Err(err) => println!("{:?}", err),
-    //         }
-    //     });
-
-    // let reader = thread::spawn(|| loop {
-    //     let read_reflections = reflections.lock().unwrap().clone();
-    //     for (ip, last_time) in read_reflections.into_iter() {
-    //         let time_diff = Local::now().timestamp() - last_time;
-    //         if time_diff > 30 {
-    //             alert(ip);
-    //         }
-    //     }
-    //     sleep(Duration::from_secs(30))
-    // });
-    // let writer = thread::spawn(||
-    // loop {
-    //     let mut write_reflection = reflections.lock().unwrap();
-    //     match rx.next() {
-    //         Ok(x) => process_packet(x, &mut write_reflection),
-    //         Err(err) => println!("{:?}", err),
-    //     }
-    // }
-    // );
+    reader.join().unwrap();
+    writer.join().unwrap();
 }
