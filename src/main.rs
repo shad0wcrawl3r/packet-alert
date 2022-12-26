@@ -14,7 +14,7 @@ use pnet_datalink::{self as datalink};
 use std::collections::HashMap;
 // use std::fs::read;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::thread;
 // use std::time::Duration;
 
@@ -115,7 +115,7 @@ fn check_timeouts(reflections: &mut HashMap<IpAddr, i64>) {}
 
 fn main() {
     let reflections: Arc<RwLock<HashMap<IpAddr, i64>>> = Arc::new(RwLock::new(HashMap::new()));
-    // let (mptx,mprx) = mpsc::channel();
+    let (message_transmit,message_recieve) = mpsc::channel::<IpAddr>();
     // let mut reflections: HashMap<IpAddr, i64> = HashMap::new();
     let interface_name = "enp3s0";
     let interfaces = datalink::interfaces();
@@ -138,6 +138,10 @@ fn main() {
         let reflections = Arc::clone(&reflections);
         move || loop {
             let mut write_reflections = reflections.write().unwrap();
+            for each_ip in message_recieve.iter(){
+                write_reflections.remove(&each_ip);
+            }
+            
             match rx.next() {
                 Ok(x) => process_packet(x, &mut write_reflections),
                 Err(err) => println!("{:?}", err),
@@ -146,23 +150,26 @@ fn main() {
     });
 
     let reader = thread::spawn({
-        let mut alerted: HashMap<IpAddr,i64> = HashMap::new();
+        
         let mut last_clean = Local::now().timestamp();
         move || loop {
+        let mut alerted: Vec<IpAddr> = vec![];
         let read_reflections = reflections.read().unwrap();
         let now = Local::now().timestamp();
         for (ip, last_time) in read_reflections.iter() {
-            if alerted.contains_key(ip) {
+            if alerted.contains(ip) {
                 continue;
             }
             let time_diff = now - last_time;
             if time_diff > 30 {
                 alert(ip);
-                alerted.insert(*ip,now);
+                alerted.push(*ip);
             }
         }
+        for each_ip in alerted {
+            message_transmit.send(each_ip).unwrap();
+        }
     }});
-
     reader.join().unwrap();
     writer.join().unwrap();
 }
