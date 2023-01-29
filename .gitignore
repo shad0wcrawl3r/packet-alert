@@ -1,3 +1,4 @@
 /target
 packet-alert
 config.*
+logs/
