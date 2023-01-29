@@ -172,6 +172,7 @@ fn main() {
         let mut alerted: Vec<IpAddr> = vec![];
         let read_reflections = reflections.read().unwrap();
         // Code is getting stuck on this line
+        // So apparently, the RwLock works such that read lock cannot be aqquired when write lock has already been given. 
         // write_to_file(read_reflections.(), "read_reflections");
         
         let now = Local::now().timestamp();
@@ -192,6 +193,6 @@ fn main() {
             message_transmit.send(each_ip).unwrap();
         }
     }});
-    reader.join().unwrap();
     writer.join().unwrap();
+    reader.join().unwrap();
 }
